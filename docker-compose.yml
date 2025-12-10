@@ -1,0 +1,167 @@
+services:
+  backend:
+    image: juanerv1/despacho-service-image:latest
+    ports:
+    - target: 5000
+      published: 5000
+      mode: ingress 
+    env_file:
+      - .env
+    environment:
+      # Base de datos
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME}
+      
+      # RabbitMQ - IMPORTANTE: URL con vhost específico
+      - RABBITMQ_URL=amqp://${RABBIT_USER}:${RABBIT_PASS}@rabbitmq:5672/${RABBIT_VHOST}
+      # Variables individuales por si se necesitan
+      - RABBITMQ_HOST=${RABBIT_HOST}
+      - RABBITMQ_PORT=${RABBITMQ_PORT}
+      - RABBITMQ_USER=${RABBIT_USER}
+      - RABBITMQ_PASS=${RABBIT_PASS}
+      - RABBITMQ_VHOST=${RABBIT_VHOST}
+      
+      # Inventario
+      - INVENTARIO_URL=${INVENTARIO_URL}
+      
+      # Flask
+      - FLASK_DEBUG=${FLASK_DEBUG}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 30s  # ⬅️ Más tiempo para que RabbitMQ/BD inicien
+        max_attempts: 5
+      update_config:
+        failure_action: continue
+        order: start-first  
+    command: python main.py
+    networks:
+      - app-network
+    
+
+  worker-inmediato:
+    image: juanerv1/despacho-service-image:latest
+    command: python workers/inmediato.py
+    env_file:
+      - .env
+    environment:
+      # Base de datos
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME}
+      
+      # RabbitMQ - MISMA configuración que backend
+      - RABBITMQ_URL=amqp://${RABBIT_USER}:${RABBIT_PASS}@rabbitmq:5672/${RABBIT_VHOST}
+      - RABBITMQ_HOST=${RABBIT_HOST}
+      - RABBITMQ_PORT=${RABBITMQ_PORT}
+      - RABBITMQ_USER=${RABBIT_USER}
+      - RABBITMQ_PASS=${RABBIT_PASS}
+      - RABBITMQ_VHOST=${RABBIT_VHOST}
+      
+      # Inventario
+      - INVENTARIO_URL=${INVENTARIO_URL}
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 30s  # ⬅️ Más tiempo para que RabbitMQ/BD inicien
+        max_attempts: 5
+      update_config:
+        failure_action: continue
+        order: start-first  
+    networks:
+      - app-network
+
+  worker-fifo:
+    image: juanerv1/despacho-service-image:latest
+    command: python workers/pendiente.py
+    env_file:
+      - .env
+    environment:
+      # Base de datos
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_NAME=${DB_NAME}
+      
+      # Inventario - necesita resolver el DNS
+      - INVENTARIO_URL=${INVENTARIO_URL}
+    deploy:
+      replicas: 1
+    networks:
+      - app-network
+
+  db:
+    image: postgres:16
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - target: 5432
+        published: 5122
+        mode: ingress 
+    volumes:
+      - ./init_scripts:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME} || exit 0"]  
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s 
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      restart_policy:  
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+        window: 120s
+    networks:
+      - app-network
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    env_file:
+      - .env
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: bash -c "rabbitmq-server & sleep 10; rabbitmqctl add_vhost despacho_vhost; rabbitmqctl set_permissions -p despacho_vhost despacho_user '.*' '.*' '.*'; wait"
+
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: overlay
+    attachable: true 
+
+volumes:
+  rabbitmq_data:
+  pgdata:
