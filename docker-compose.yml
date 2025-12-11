@@ -67,7 +67,7 @@ services:
       # Inventario
       - INVENTARIO_URL=${INVENTARIO_URL}
     deploy:
-      replicas: 3
+      replicas: 1
       restart_policy:
         condition: on-failure
         delay: 30s  # ⬅️ Más tiempo para que RabbitMQ/BD inicien
@@ -138,6 +138,7 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBIT_PASS}
+      RABBITMQ_DEFAULT_VHOST: despacho_vhost
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -148,7 +149,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    command: bash -c "rabbitmq-server & sleep 10; rabbitmqctl add_vhost despacho_vhost; rabbitmqctl set_permissions -p despacho_vhost despacho_user '.*' '.*' '.*'; wait"
+    #command: bash -c "rabbitmq-server & sleep 10; rabbitmqctl add_vhost despacho_vhost; rabbitmqctl set_permissions -p despacho_vhost despacho_user '.*' '.*' '.*'; wait"
 
     deploy:
       replicas: 1
@@ -159,7 +160,7 @@ services:
 
 networks:
   app-network:
-    driver: overlay
+    driver: bridge
     attachable: true 
 
 volumes:

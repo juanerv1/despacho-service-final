@@ -27,24 +27,34 @@ def get_db_connection():
         port=DB_PORT
     )
 
-def wait_for_database(max_retries=10, retry_delay=5):
-    """Esperar a que la base de datos esté disponible"""
+def wait_for_database(max_retries=float('inf'), retry_delay=5):
+    """Esperar a que la base de datos esté disponible - INTENTA INFINITAMENTE"""
     logger.info("⏳ Esperando conexión a base de datos...")
     
-    for attempt in range(max_retries):
+    attempt = 0
+    while attempt < max_retries:
+        attempt += 1
         try:
             conn = get_db_connection()
             conn.close()
-            logger.info(f"✅ Conectado a la base de datos (intento {attempt+1}/{max_retries})")
-            return True
-        except psycopg2.OperationalError as e:
-            if attempt < max_retries - 1:
-                logger.warning(f"⏳ BD no disponible, reintentando en {retry_delay}s...")
-                time.sleep(retry_delay)
+            
+            if max_retries == float('inf'):
+                logger.info(f"✅ Conectado a la base de datos")
             else:
-                logger.error(f"❌ Máximos reintentos de BD alcanzados: {e}")
-                return False
+                logger.info(f"✅ Conectado a la base de datos (intento {attempt}/{max_retries})")
+            
+            return True
+            
+        except psycopg2.OperationalError as e:
+            if attempt < max_retries:
+                if max_retries == float('inf'):
+                    logger.warning(f"⏳ BD no disponible, reintentando en {retry_delay}s... (intento {attempt})")
+                else:
+                    logger.warning(f"⏳ BD no disponible (intento {attempt}/{max_retries}), reintentando en {retry_delay}s...")
+                
+                time.sleep(retry_delay)
     
+    logger.error(f"❌ Máximos reintentos de BD alcanzados")
     return False
 
 def wait_for_inventory(max_retries=float('inf'), retry_delay=30):
@@ -210,44 +220,62 @@ def main():
     """Worker principal - Punto de entrada"""
     logger.info("🚀 Iniciando worker inmediato...")
     
-    # 1. Esperar por base de datos
-    if not wait_for_database():
-        logger.error("❌ No se pudo conectar a la base de datos. Saliendo.")
-        return
+    while True:  # <--- BUCLE INFINITO EXTERNO
+        logger.info("🔄 Ciclo de inicio del worker...")
+        
+        # 1. Esperar por base de datos
+        if not wait_for_database():
+            logger.error("❌ No se pudo conectar a la base de datos. Reintentando en 30s...")
+            time.sleep(30)
+            continue
+        
+        # 2. Esperar por inventario (INFINITAMENTE)
+        if not wait_for_inventory(max_retries=float('inf'), retry_delay=10):
+            logger.error("❌ No se pudo conectar al inventario. Reintentando en 30s...")
+            time.sleep(30)
+            continue
+        
+        # 3. Crear conexión a RabbitMQ
+        try:
+            connection, channel = create_rabbitmq_connection()
+        except Exception as e:
+            logger.error(f"❌ Error conectando a RabbitMQ: {e}. Reintentando en 30s...")
+            time.sleep(30)
+            continue
+        
+        # 4. Configurar consumo
+        channel.basic_consume(
+            queue='ordenes_inmediatas',
+            on_message_callback=procesar_mensaje,
+            auto_ack=False
+        )
+        
+        logger.info("✅ Worker inmediato iniciado y listo para procesar órdenes")
+        
+        # 5. Iniciar consumo
+        try:
+            channel.start_consuming()
+        except pika.exceptions.ConnectionClosedByBroker:
+            logger.error("❌ Conexión cerrada por RabbitMQ. Reconectando en 10s...")
+            time.sleep(10)
+            continue
+        except pika.exceptions.AMQPConnectionError:
+            logger.error("❌ Error de conexión AMQP. Reconectando en 10s...")
+            time.sleep(10)
+            continue
+        except KeyboardInterrupt:
+            logger.info("👋 Interrupción recibida, cerrando worker...")
+            break
+        except Exception as e:
+            logger.error(f"❌ Error en consumo: {e}. Reconectando en 30s...")
+            time.sleep(30)
+            continue
+        finally:
+            if connection and not connection.is_closed:
+                connection.close()
+                logger.info("🔌 Conexión cerrada, reiniciando ciclo...")
     
-    # 2. Esperar por inventario
-    if not wait_for_inventory(max_retries=10, retry_delay=10):
-        logger.error("❌ No se pudo conectar al inventario. Saliendo.")
-        return
-    
-    # 3. Crear conexión a RabbitMQ
-    try:
-        connection, channel = create_rabbitmq_connection()
-    except Exception as e:
-        logger.error(f"❌ Error conectando a RabbitMQ: {e}")
-        return
-    
-    # 4. Configurar consumo
-    channel.basic_consume(
-        queue='ordenes_inmediatas',
-        on_message_callback=procesar_mensaje,
-        auto_ack=False
-    )
-    
-    logger.info("✅ Worker inmediato iniciado y listo para procesar órdenes")
-    logger.info("📊 Esperando mensajes. Presiona Ctrl+C para salir.")
-    
-    # 5. Iniciar consumo
-    try:
-        channel.start_consuming()
-    except KeyboardInterrupt:
-        logger.info("👋 Interrupción recibida, cerrando worker...")
-    except Exception as e:
-        logger.error(f"❌ Error en consumo: {e}", exc_info=True)
-    finally:
-        if connection and not connection.is_closed:
-            connection.close()
-            logger.info("🔌 Conexión cerrada")
+    logger.info("👋 Worker finalizado")
 
 if __name__ == '__main__':
     main()

@@ -16,7 +16,7 @@ def get_db_connection():
         host=os.getenv('DB_HOST', 'postgres'),
         database=os.getenv('DB_NAME', 'despachos_db'),
         user=os.getenv('DB_USER', 'despachos_user123'),
-        password=os.getenv('DB_PASS', '@SecurePassword5826'),  # Corrige: quita el @
+        password=os.getenv('DB_PASS', '@ecurePassword5826'),  # Corrige: quita el @
         port=os.getenv('DB_PORT', '5432')
     )
 
@@ -25,42 +25,55 @@ class WorkerFIFO:
         self.inventario = InventarioClient()
         self.intervalo = 30  # segundos
     
-    def wait_for_database(self, max_retries=10, retry_delay=5):
+    def wait_for_database(self, max_retries=float('inf'), retry_delay=5):
         """Esperar a que la base de datos esté disponible"""
-        for attempt in range(max_retries):
+        logger.info("⏳ Esperando conexión a base de datos...")
+
+        attempt = 0
+        while attempt < max_retries:
+            attempt += 1
             try:
                 conn = get_db_connection()
                 conn.close()
-                logger.info(f"✅ Conectado a la base de datos (intento {attempt+1}/{max_retries})")
-                return True
-            except psycopg2.OperationalError as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"⏳ BD no disponible, reintentando en {retry_delay}s...")
-                    time.sleep(retry_delay)
+                if max_retries == float('inf'):
+                    logger.info(f"✅ Conectado a la base de datos")
                 else:
-                    logger.error(f"❌ Máximos reintentos alcanzados: {e}")
-                    return False
+                    logger.info(f"✅ Conectado a la base de datos (intento {attempt}/{max_retries})")
+            
+                return True
+            
+            except psycopg2.OperationalError as e:
+                if attempt < max_retries:
+                    if max_retries == float('inf'):
+                        logger.warning(f"⏳ BD no disponible, reintentando en {retry_delay}s... (intento {attempt})")
+                    else:
+                        logger.warning(f"⏳ BD no disponible (intento {attempt}/{max_retries}), reintentando en {retry_delay}s...")
+                    
+                    time.sleep(retry_delay)
+
+        logger.error(f"❌ Máximos reintentos de BD alcanzados")            
         return False
     
-    def wait_for_inventory(self, max_retries=10, retry_delay=10):
+    def wait_for_inventory(self, max_retries=float('inf'), retry_delay=30):
         """Esperar a que el inventario esté disponible"""
         logger.info("⏳ Verificando conexión a inventario...")
         
-        for attempt in range(max_retries):
+        inventario = InventarioClient()
+        retries = 0
+        
+        while retries < max_retries:
             try:
-                if self.inventario.check_health():
+                if inventario.check_health():
                     logger.info("✅ Inventario disponible")
                     return True
             except Exception as e:
                 logger.debug(f"Health check falló: {e}")
             
-            if attempt < max_retries - 1:
-                logger.warning(f"⏳ Inventario no disponible (intento {attempt+1}/{max_retries}), reintentando en {retry_delay}s...")
-                time.sleep(retry_delay)
-            else:
-                logger.error(f"❌ Máximos reintentos de inventario alcanzados")
-                return False
+            retries += 1
+            logger.warning(f"⏳ Inventario no disponible (intento {retries}), reintentando en {retry_delay}s...")
+            time.sleep(retry_delay)
         
+        logger.error("❌ No se pudo conectar al inventario")
         return False
     
     def obtener_orden_mas_antigua(self):
@@ -207,27 +220,33 @@ class WorkerFIFO:
             logger.info(f"📦 Despachadas: {procesadas} órdenes")
     
     def run(self):
-        """Loop principal"""
+        """Loop principal - NUNCA TERMINA"""
         logger.info("🚀 Worker FIFO iniciado")
         
-        # Esperar por BD antes de empezar
-        if not self.wait_for_database():
-            logger.error("❌ No se pudo conectar a BD. Saliendo.")
-            return
+        # 1. CONEXIÓN INICIAL (UNA SOLA VEZ) ✅
+        logger.info("🔄 Iniciando ciclo de conexión...")
         
-        # Esperar por inventario antes de empezar
-        if not self.wait_for_inventory():
-            logger.error("❌ No se pudo conectar al inventario. Saliendo.")
-            return
+        # Esperar por BD (hasta que conecte)
+        while not self.wait_for_database():
+            logger.error("❌ No se pudo conectar a BD. Reintentando en 30s...")
+            time.sleep(30)
         
-        # Ciclo principal
-        logger.info("✅ Servicios disponibles, iniciando ciclo principal...")
+        # Esperar por inventario (hasta que conecte)  
+        while not self.wait_for_inventory():
+            logger.error("❌ No se pudo conectar al inventario. Reintentando en 30s...")
+            time.sleep(30)
+        
+        logger.info("✅ Servicios disponibles, iniciando ciclo de procesamiento...")
+        
+        # 2. CICLO DE PROCESAMIENTO INFINITO (SIN RECONECTAR) ✅
         while True:
+            logger.info("🔄 Ciclo FIFO")
             try:
                 self.ejecutar_ciclo()
             except Exception as e:
-                logger.error(f"❌ Error en ciclo: {e}")
+                logger.error(f"❌ Error en ciclo de procesamiento: {e}")
             
+            # Pausa entre ciclos
             time.sleep(self.intervalo)
 
 if __name__ == "__main__":

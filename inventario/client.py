@@ -21,7 +21,7 @@ class InventarioClient:
             )
             if response.status_code == 200:
                 data = response.json()
-                return data.get("status") == "healthy"
+                return data.get("status") == "ok"
             return False
         except requests.exceptions.RequestException as e:
             logger.debug(f"Health check fallido para inventario: {e}")
@@ -30,31 +30,53 @@ class InventarioClient:
     def consultar_stock_pendiente(self) -> Dict[str, int]:
         """Consultar stock pendiente para todos los productos"""
         try:
-            response = requests.get(f"{self.base_url}/api/stock/pendiente", timeout=5)
+            response = requests.get(f"{self.base_url}/api/productos", timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                if isinstance(data, dict) and 'productos' in data:
-                    return {p['producto_id']: p['cantidad'] for p in data['productos'] 
-                            if 'producto_id' in p and 'cantidad' in p}
+                
+                # Para el formato específico de tu JSON
+                if isinstance(data, list):
+                    stock_pendiente = {}
+                    for item in data:
+                        if (isinstance(item, dict) and 
+                            item.get('estado') == 'Pendiente' and 
+                            item.get('id_producto')):
+                            
+                            producto_id = item['id_producto']
+                            cantidad = item.get('cantidad', 0)
+                            
+                            # SOBREESCRIBE (no suma), incluye incluso si cantidad es 0
+                            stock_pendiente[producto_id] = cantidad
+                    
+                    return stock_pendiente
+                
+                # Mantener compatibilidad con formato anterior
+                elif isinstance(data, dict) and 'productos' in data:
+                    return {
+                        p['producto_id']: p['cantidad'] 
+                        for p in data['productos'] 
+                        if 'producto_id' in p and 'cantidad' in p
+                    }
+                
                 return {}
+            
             logger.error(f"Error {response.status_code} al consultar stock pendiente")
             return {}
+            
         except Exception as e:
-            logger.error(f"Error de conexión: {e}")
+            logger.error(f"Error al consultar stock pendiente: {e}")
             return {}
-    
         
     def restar_stock_despacho(self, producto_id: str, cantidad: int) -> bool:
         """Endpoint específico para restar stock en despachos"""
         try:
             payload = {
-                "producto_id": producto_id,
-                "cantidad": cantidad,
-                "estado": "despacho"
-            }
+                "id_producto": producto_id,
+                "cantidad": cantidad            
+                }
             
             response = requests.post(
-                f"{self.base_url}/api/stock/despachar",
+                f"{self.base_url}/api/productos/despachos/descontar",
                 json=payload,
                 timeout=5
             )
@@ -79,13 +101,12 @@ class InventarioClient:
         """Endpoint específico para restar stock en despachos"""
         try:
             payload = {
-                "producto_id": producto_id,
-                "cantidad": cantidad,
-                "estado": "pendiente"
+                "id_producto": producto_id,
+                "cantidad": cantidad
             }
             
             response = requests.post(
-                f"{self.base_url}/api/stock/despachar",
+                f"{self.base_url}/api/productos/pendientes/descontar",
                 json=payload,
                 timeout=5
             )

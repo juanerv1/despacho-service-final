@@ -26,7 +26,7 @@ services:
       - RABBITMQ_VHOST=despacho_vhost
       
       # Inventario - HARDCODEADO (para desarrollo local)
-      - INVENTARIO_URL=http://host.docker.internal:8001
+      - INVENTARIO_URL=http://ec2-44-197-195-198.compute-1.amazonaws.com:5050
       
       # Flask
       - FLASK_DEBUG=True
@@ -68,9 +68,9 @@ services:
       - RABBITMQ_VHOST=despacho_vhost
       
       # Inventario
-      - INVENTARIO_URL=http://host.docker.internal:8001
+      - INVENTARIO_URL=http://ec2-44-197-195-198.compute-1.amazonaws.com:5050
     deploy:
-      replicas: 3  # Solo 1 para pruebas
+      replicas: 3  
       restart_policy:
         condition: on-failure
         delay: 60s  # Más tiempo para que RabbitMQ inicie
@@ -84,7 +84,6 @@ services:
     image: juanerv1/despacho-service-image:latest
     command: python workers/pendiente.py
     environment:
-      # Base de datos - HARDCODEADO
       - DB_HOST=db
       - DB_PORT=5432
       - DB_USER=despachos_user123
@@ -92,7 +91,7 @@ services:
       - DB_NAME=despachos_db
       
       # Inventario
-      - INVENTARIO_URL=http://host.docker.internal:8001
+      - INVENTARIO_URL=http://ec2-44-197-195-198.compute-1.amazonaws.com:5050
     deploy:
       replicas: 1
       restart_policy:
